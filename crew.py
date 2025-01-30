@@ -1,20 +1,9 @@
 import streamlit as st
-from crewai import Crew,Process
-from tasks import researching, scoring
-from agents import fact_researcher, text_scorer
+from crewai import Crew,Process,Task,Agent,LLM
+from crewai_tools import SerperDevTool, EXASearchTool
 
 import os
 from pathlib import Path
-
-## Forming the tech focused crew with some enhanced configuration
-crew=Crew(
-    agents=[fact_researcher,text_scorer],
-    tasks=[researching,scoring],
-    process=Process.sequential,
-)
-
-def read_markdown_file(markdown_file):
-    return Path(markdown_file).read_text()
 
 # Set page title
 st.title("AI Powered WAT Scorer")
@@ -39,13 +28,90 @@ st.sidebar.markdown(
     """
 )
 gemini_api_key = st.sidebar.text_input("Google Gemini API Key", type="password")
-os.environ['GEMINI_API_KEY'] = gemini_api_key
-
 serper_api_key = st.sidebar.text_input("Serper API Key", type="password")
-os.environ['SERPER_API_KEY'] = serper_api_key
-
 exa_api_key = st.sidebar.text_input("Exa API Key", type="password")
+
+os.environ['SERPER_API_KEY'] = serper_api_key
 os.environ['EXA_API_KEY'] = exa_api_key
+
+serper_tool = SerperDevTool()
+exa_tool = EXASearchTool()
+
+## call the gemini model
+llm_main = LLM(
+    api_key=gemini_api_key, # get your Gemini API key at https://aistudio.google.com
+    model="gemini/gemini-1.5-flash",
+    temperature=0.5)
+
+llm_summarizer = LLM(
+    api_key=gemini_api_key,
+    model="gemini/gemini-1.5-flash-8b",
+    temperature=0.5)
+
+# Creating a senior researcher agent with memory and verbose mode
+
+fact_researcher = Agent(
+    role="Senior Fact Checker",
+    goal="Check the latest information on the {topic} and all the latest developments of it",
+    verbose=True,
+    memory=True,
+    backstory=(
+        "With a meticulous eye for detail and a passion for truth, you are dedicated to ensuring that information is accurate, unbiased, and trustworthy. "
+        "Your expertise lies in cross-referencing sources, identifying misinformation, and providing clear, evidence-based conclusions."
+    ),
+    tools=[serper_tool],  # Assuming the tool is something like a fact-checking API or database
+    llm=llm_main,
+    allow_delegation=True  # Allowing communication with other agents for collaborative verification
+)
+
+text_scorer = Agent(
+    role="Text Summarizer and Scorer",
+    goal="Summarize the given text and provide a quality score on a scale of 0 to 10",
+    verbose=True,
+    memory=True,
+    backstory=(
+        "You are an expert in analyzing text while evaluating its quality. "
+        "Your precision and efficiency allow you to deliver clear summaries and accurate scores, ensuring quick and reliable results."
+    ),
+    tools=[serper_tool, exa_tool],  # Assuming the tool is a summarization API or library (e.g., GPT-based summarization)
+    llm=llm_summarizer,
+    allow_delegation=False  # No delegation needed for this task
+)
+
+# Research task
+researching = Task(
+  description=(
+    "Identify the big trends and the latest developments in {topic}."
+    "Focus on identifying every narrative."
+    "make sure that the information is accurate and trustworthy."
+  ),
+  expected_output='A point-wise detailed report on the given {topic}',
+  tools=[serper_tool],
+  agent=fact_researcher,
+)
+
+scoring = Task(
+  description=(
+    "Evaluate the {text} based on clarity, coherence, grammar, and overall readability."
+    "Provide a quality score on a scale of 0 to 10."
+    "double-check the context and relevance with the researcher"
+  ),
+  expected_output="A score from 0 to 10.",
+  tools=[serper_tool, exa_tool],
+  async_execution=False,
+  agent=text_scorer,
+  output_file='text_score.md'  # Example of output customization
+)
+
+## Forming the tech focused crew with some enhanced configuration
+crew=Crew(
+    agents=[fact_researcher,text_scorer],
+    tasks=[researching,scoring],
+    process=Process.sequential,
+)
+
+def read_markdown_file(markdown_file):
+    return Path(markdown_file).read_text()
 
 # Input fields
 
